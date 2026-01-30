@@ -1,9 +1,10 @@
 /**
  * Telegram message formatter
- * Formats appointment cancellations into user-friendly messages
+ * Formats appointment cancellations and reschedules into user-friendly messages
  */
 
 import { Appointment } from '../calendar/types';
+import { RescheduledAppointment } from '../monitor/detector';
 
 /**
  * Format a date with timezone awareness
@@ -128,6 +129,75 @@ export function formatMultipleCancellations(
 
   message += `Book now: ${bookingUrl}\n`;
   message += '\n#AvailableSlot';
+
+  return message;
+}
+
+/**
+ * Format a rescheduled appointment that creates a gap into a Telegram message
+ * @param rescheduled - The rescheduled appointment info
+ * @param bookingUrl - URL to the booking page
+ * @returns Formatted Telegram message
+ */
+export function formatRescheduleMessage(
+  rescheduled: RescheduledAppointment,
+  bookingUrl: string,
+): string {
+  const date = formatDate(rescheduled.originalStartTime);
+  const timeRange = formatTimeRange(
+    rescheduled.originalStartTime,
+    rescheduled.originalEndTime,
+  );
+
+  let message = '🎉 New Slot Available!\n\n';
+  message += `📅 Date: ${date}\n`;
+  message += `🕐 Time: ${timeRange} (Lisbon time)\n`;
+  message += `\nBook now: ${bookingUrl}\n`;
+  message += '\n#AvailableSlot #Reschedule';
+
+  return message;
+}
+
+/**
+ * Format multiple rescheduled appointments into a single message
+ * @param rescheduled - Array of rescheduled appointments
+ * @param bookingUrl - URL to the booking page
+ * @returns Formatted Telegram message
+ */
+export function formatMultipleReschedules(
+  rescheduled: RescheduledAppointment[],
+  bookingUrl: string,
+): string {
+  if (rescheduled.length === 0) {
+    return '';
+  }
+
+  if (rescheduled.length === 1) {
+    return formatRescheduleMessage(rescheduled[0], bookingUrl);
+  }
+
+  // Multiple reschedules
+  let message = `🎉 ${rescheduled.length} New Slots Available!\n\n`;
+
+  // Sort by original start time
+  const sorted = [...rescheduled].sort(
+    (a, b) => a.originalStartTime - b.originalStartTime,
+  );
+
+  for (let i = 0; i < sorted.length; i++) {
+    const item = sorted[i];
+    const date = formatDate(item.originalStartTime);
+    const timeRange = formatTimeRange(
+      item.originalStartTime,
+      item.originalEndTime,
+    );
+
+    message += `${i + 1}. ${date}\n`;
+    message += `   🕐 ${timeRange}\n\n`;
+  }
+
+  message += `Book now: ${bookingUrl}\n`;
+  message += '\n#AvailableSlot #Reschedule';
 
   return message;
 }

@@ -88,6 +88,28 @@ export function updateLastSeen(id: string, lastSeen: number): void {
 }
 
 /**
+ * Update appointment times when rescheduled
+ * @param id - Appointment ID
+ * @param startTime - New start time
+ * @param endTime - New end time
+ * @param lastSeen - New last_seen timestamp
+ */
+export function updateAppointmentTimes(
+  id: string,
+  startTime: number,
+  endTime: number,
+  lastSeen: number,
+): void {
+  const stmt = getDb().prepare(`
+    UPDATE appointments
+    SET start_time = ?, end_time = ?, last_seen = ?
+    WHERE id = ?
+  `);
+
+  stmt.run(startTime, endTime, lastSeen, id);
+}
+
+/**
  * Mark an appointment as cancelled
  * @param id - Appointment ID
  */

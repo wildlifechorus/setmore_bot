@@ -5,7 +5,13 @@
 
 import TelegramBot from 'node-telegram-bot-api';
 import { Appointment } from '../calendar/types';
-import { formatCancellationMessage, formatMultipleCancellations } from './formatter';
+import { RescheduledAppointment } from '../monitor/detector';
+import {
+  formatCancellationMessage,
+  formatMultipleCancellations,
+  formatRescheduleMessage,
+  formatMultipleReschedules,
+} from './formatter';
 
 /**
  * Telegram bot instance
@@ -156,6 +162,68 @@ export async function testBotConnection(): Promise<void> {
     console.log('Test message sent successfully');
   } catch (error) {
     console.error('Failed to send test message:', error);
+    throw error;
+  }
+}
+
+/**
+ * Send a reschedule notification to the Telegram channel
+ * @param rescheduled - The rescheduled appointment info
+ * @returns Promise that resolves when notification is sent
+ */
+export async function sendRescheduleNotification(
+  rescheduled: RescheduledAppointment,
+): Promise<void> {
+  const { bookingUrl } = getConfig();
+  const message = formatRescheduleMessage(rescheduled, bookingUrl);
+  
+  try {
+    await sendMessage(message);
+    console.log(
+      `Reschedule notification sent for: ${rescheduled.appointment.id}`,
+    );
+  } catch (error) {
+    console.error('Failed to send reschedule notification:', error);
+    throw error;
+  }
+}
+
+/**
+ * Send notifications for multiple reschedules
+ * Can be sent as a single combined message or individual messages
+ * @param rescheduled - Array of rescheduled appointments
+ * @param combineMessages - If true, send as one message; if false, send separately
+ * @returns Promise that resolves when all notifications are sent
+ */
+export async function sendMultipleRescheduleNotifications(
+  rescheduled: RescheduledAppointment[],
+  combineMessages: boolean = true,
+): Promise<void> {
+  if (rescheduled.length === 0) {
+    return;
+  }
+  
+  const { bookingUrl } = getConfig();
+  
+  try {
+    if (combineMessages) {
+      // Send as a single combined message
+      const message = formatMultipleReschedules(rescheduled, bookingUrl);
+      await sendMessage(message);
+      console.log(
+        `Combined reschedule notification sent for ${rescheduled.length} appointments`,
+      );
+    } else {
+      // Send individual messages for each reschedule
+      for (const item of rescheduled) {
+        await sendRescheduleNotification(item);
+        
+        // Add a small delay between messages to avoid rate limiting
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+  } catch (error) {
+    console.error('Failed to send multiple reschedule notifications:', error);
     throw error;
   }
 }

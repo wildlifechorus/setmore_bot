@@ -5,7 +5,10 @@
 
 import { fetchAndParseCalendar, filterFutureAppointments } from '../calendar/fetcher';
 import { detectCancellations, isFirstRun, initializeAppointments } from './detector';
-import { sendMultipleCancellationNotifications } from '../telegram/bot';
+import {
+  sendMultipleCancellationNotifications,
+  sendMultipleRescheduleNotifications,
+} from '../telegram/bot';
 
 /**
  * Scheduler configuration
@@ -56,16 +59,29 @@ async function performCheck(
       return;
     }
     
-    // Detect cancellations
+    // Detect cancellations and reschedules
     const result = detectCancellations(futureAppointments);
     
     // Send notifications for cancelled appointments
     if (result.cancelled.length > 0) {
-      console.log(`Sending notifications for ${result.cancelled.length} cancellation(s)...`);
+      console.log(
+        `Sending notifications for ${result.cancelled.length} cancellation(s)...`,
+      );
       await sendMultipleCancellationNotifications(result.cancelled, true);
-      console.log('Notifications sent successfully');
-    } else {
-      console.log('No cancellations detected');
+      console.log('Cancellation notifications sent successfully');
+    }
+    
+    // Send notifications for reschedules that create gaps
+    if (result.rescheduledWithGaps.length > 0) {
+      console.log(
+        `Sending notifications for ${result.rescheduledWithGaps.length} reschedule(s) creating gaps...`,
+      );
+      await sendMultipleRescheduleNotifications(result.rescheduledWithGaps, true);
+      console.log('Reschedule notifications sent successfully');
+    }
+    
+    if (result.cancelled.length === 0 && result.rescheduledWithGaps.length === 0) {
+      console.log('No cancellations or significant reschedules detected');
     }
     
     console.log(`--- Check #${checkCount} completed ---\n`);
