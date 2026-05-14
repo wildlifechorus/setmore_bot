@@ -43,9 +43,7 @@ async function fetchCalendarData(
       });
 
       if (!response.ok) {
-        throw new Error(
-          `HTTP ${response.status}: ${response.statusText}`,
-        );
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
 
       const data = await response.text();
@@ -87,12 +85,7 @@ function parseCalendarData(icalData: string): Appointment[] {
       const event = events[key] as CalendarEvent;
 
       // Only process VEVENT type entries with required fields
-      if (
-        event.type !== 'VEVENT' ||
-        !event.uid ||
-        !event.start ||
-        !event.end
-      ) {
+      if (event.type !== 'VEVENT' || !event.uid || !event.start || !event.end) {
         continue;
       }
 
@@ -115,7 +108,9 @@ function parseCalendarData(icalData: string): Appointment[] {
     return appointments;
   } catch (error) {
     console.error('Error parsing calendar data:', error);
-    throw new Error(`Failed to parse calendar data: ${(error as Error).message}`);
+    throw new Error(
+      `Failed to parse calendar data: ${(error as Error).message}`,
+    );
   }
 }
 
@@ -153,4 +148,23 @@ export function filterFutureAppointments(
 ): Appointment[] {
   const now = Date.now();
   return appointments.filter((apt) => apt.startTime > now);
+}
+
+/**
+ * Recurring feeds often emit multiple VEVENT instances with the same iCal UID.
+ * The database stores one row per UID; keep the earliest future occurrence per id.
+ * @param appointments - Appointments to deduplicate (e.g. future-only list)
+ * @returns One appointment per unique id
+ */
+export function dedupeAppointmentsById(
+  appointments: Appointment[],
+): Appointment[] {
+  const byId = new Map<string, Appointment>();
+  for (const apt of appointments) {
+    const existing = byId.get(apt.id);
+    if (!existing || apt.startTime < existing.startTime) {
+      byId.set(apt.id, apt);
+    }
+  }
+  return Array.from(byId.values());
 }

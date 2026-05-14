@@ -3,8 +3,16 @@
  * Main monitoring loop that checks for cancellations at regular intervals
  */
 
-import { fetchAndParseCalendar, filterFutureAppointments } from '../calendar/fetcher';
-import { detectCancellations, isFirstRun, initializeAppointments } from './detector';
+import {
+  dedupeAppointmentsById,
+  fetchAndParseCalendar,
+  filterFutureAppointments,
+} from '../calendar/fetcher';
+import {
+  detectCancellations,
+  isFirstRun,
+  initializeAppointments,
+} from './detector';
 import {
   sendMultipleCancellationNotifications,
   sendMultipleRescheduleNotifications,
@@ -39,18 +47,22 @@ async function performCheck(
   maxRetries: number = 3,
 ): Promise<void> {
   checkCount++;
-  console.log(`\n--- Check #${checkCount} started at ${new Date().toISOString()} ---`);
-  
+  console.log(
+    `\n--- Check #${checkCount} started at ${new Date().toISOString()} ---`,
+  );
+
   try {
     // Fetch and parse the calendar
     const allAppointments = await fetchAndParseCalendar(calendarUrl, {
       maxRetries,
     });
-    
-    // Filter to only future appointments
-    const futureAppointments = filterFutureAppointments(allAppointments);
+
+    // Filter to future only, then one row per iCal UID (recurrences share UID).
+    const futureAppointments = dedupeAppointmentsById(
+      filterFutureAppointments(allAppointments),
+    );
     console.log(`Found ${futureAppointments.length} future appointments`);
-    
+
     // Check if this is the first run
     if (isFirstRun()) {
       // Initialize database with current appointments
@@ -58,10 +70,10 @@ async function performCheck(
       console.log('First run complete - no notifications sent');
       return;
     }
-    
+
     // Detect cancellations and reschedules
     const result = detectCancellations(futureAppointments);
-    
+
     // Send notifications for cancelled appointments
     if (result.cancelled.length > 0) {
       console.log(
@@ -70,20 +82,26 @@ async function performCheck(
       await sendMultipleCancellationNotifications(result.cancelled, true);
       console.log('Cancellation notifications sent successfully');
     }
-    
+
     // Send notifications for reschedules that create gaps
     if (result.rescheduledWithGaps.length > 0) {
       console.log(
         `Sending notifications for ${result.rescheduledWithGaps.length} reschedule(s) creating gaps...`,
       );
-      await sendMultipleRescheduleNotifications(result.rescheduledWithGaps, true);
+      await sendMultipleRescheduleNotifications(
+        result.rescheduledWithGaps,
+        true,
+      );
       console.log('Reschedule notifications sent successfully');
     }
-    
-    if (result.cancelled.length === 0 && result.rescheduledWithGaps.length === 0) {
+
+    if (
+      result.cancelled.length === 0 &&
+      result.rescheduledWithGaps.length === 0
+    ) {
       console.log('No cancellations or significant reschedules detected');
     }
-    
+
     console.log(`--- Check #${checkCount} completed ---\n`);
   } catch (error) {
     console.error(`Error during check #${checkCount}:`, error);
@@ -100,27 +118,29 @@ export function startScheduler(config: SchedulerConfig): void {
     console.log('Scheduler is already running');
     return;
   }
-  
+
   const { calendarUrl, checkIntervalMs, maxRetries = 3 } = config;
-  
+
   console.log('Starting scheduler...');
   console.log(`Calendar URL: ${calendarUrl}`);
-  console.log(`Check interval: ${checkIntervalMs}ms (${checkIntervalMs / 1000}s)`);
-  
+  console.log(
+    `Check interval: ${checkIntervalMs}ms (${checkIntervalMs / 1000}s)`,
+  );
+
   isRunning = true;
-  
+
   // Perform initial check immediately
   performCheck(calendarUrl, maxRetries).catch((error) => {
     console.error('Error in initial check:', error);
   });
-  
+
   // Schedule regular checks
   intervalId = setInterval(() => {
     performCheck(calendarUrl, maxRetries).catch((error) => {
       console.error('Error in scheduled check:', error);
     });
   }, checkIntervalMs);
-  
+
   console.log('Scheduler started successfully');
 }
 
@@ -132,14 +152,14 @@ export function stopScheduler(): void {
     console.log('Scheduler is not running');
     return;
   }
-  
+
   console.log('Stopping scheduler...');
-  
+
   if (intervalId) {
     clearInterval(intervalId);
     intervalId = null;
   }
-  
+
   isRunning = false;
   console.log('Scheduler stopped');
 }
