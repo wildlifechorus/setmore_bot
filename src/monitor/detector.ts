@@ -5,24 +5,34 @@
 
 import { Appointment } from '../calendar/types';
 import {
+  getActiveAppointments,
   getFutureActiveAppointments,
   insertAppointment,
   updateLastSeen,
   markAsCancelled,
   updateAppointmentTimes,
 } from '../database/db';
+import {
+  freedSegmentsAfterReschedule,
+  getLongestFreedSegment,
+} from './intervals';
 
 /**
- * Represents a rescheduled appointment that creates a gap
+ * Represents a rescheduled appointment that frees a contiguous block
+ * of the previous slot large enough to notify about.
  */
 export interface RescheduledAppointment {
   /** The appointment with its NEW time */
   appointment: Appointment;
-  /** Original start time (Unix timestamp) */
+  /** Previous booking start (Unix ms); useful for logs */
   originalStartTime: number;
-  /** Original end time (Unix timestamp) */
+  /** Previous booking end (Unix ms); useful for logs */
   originalEndTime: number;
-  /** Duration of the gap created in minutes */
+  /** Start of the freed window shown to clients (Unix ms) */
+  gapStartTime: number;
+  /** End of the freed window shown to clients (Unix ms) */
+  gapEndTime: number;
+  /** Duration of gapStartTime–gapEndTime in whole minutes */
   gapDurationMinutes: number;
 }
 
@@ -34,7 +44,7 @@ export interface CancellationCheckResult {
   cancelled: Appointment[];
   /** New appointments added */
   added: Appointment[];
-  /** Rescheduled appointments that create gaps >= 1.5 hours */
+  /** Reschedules where a contiguous freed slice of the old slot is >= 1.5h */
   rescheduledWithGaps: RescheduledAppointment[];
   /** Existing appointments updated */
   updated: number;
@@ -50,8 +60,10 @@ export interface CancellationCheckResult {
  *    - In DB but NOT in current = Cancelled
  *    - In current but NOT in DB = New appointment
  *    - In both = Existing appointment
- *      - If times changed AND original duration >= 1.5 hours = Rescheduled with gap
- *      - Otherwise = Update last_seen
+ *      - If times changed: compute time in the OLD slot not covered by the
+ *        NEW slot; if the longest contiguous freed piece is >= 1.5 hours,
+ *        treat as rescheduled-with-gap (else only update times / last_seen)
+ *      - If times unchanged = Update last_seen
  *
  * @param currentAppointments - Current appointments from calendar feed
  * @returns Result containing cancelled, added, rescheduled, and updated appointments
@@ -63,16 +75,18 @@ export function detectCancellations(
   const MIN_GAP_MINUTES = 90; // 1.5 hours
   const MIN_GAP_MS = MIN_GAP_MINUTES * 60 * 1000;
 
-  // Get all future active appointments from database
-  const dbAppointments = getFutureActiveAppointments();
+  // Future-only: used to detect cancellations (no longer in feed).
+  const dbFutureAppointments = getFutureActiveAppointments();
+  // All active rows: membership for "new vs existing" must include rows whose
+  // start_time is already in the past; otherwise the same UID can reappear in
+  // the feed with updated times and we would INSERT again (PRIMARY KEY error).
+  const dbMap = new Map(getActiveAppointments().map((apt) => [apt.id, apt]));
 
-  // Create maps for quick lookup
   const currentIds = new Set(currentAppointments.map((apt) => apt.id));
-  const dbMap = new Map(dbAppointments.map((apt) => [apt.id, apt]));
 
   // Find cancelled appointments (in DB but not in current feed)
   const cancelledAppointments: Appointment[] = [];
-  for (const dbApt of dbAppointments) {
+  for (const dbApt of dbFutureAppointments) {
     if (!currentIds.has(dbApt.id)) {
       // This appointment is no longer in the feed - it was cancelled
       markAsCancelled(dbApt.id);
@@ -110,22 +124,31 @@ export function detectCancellations(
         currentApt.endTime !== dbApt.endTime;
 
       if (timesChanged) {
-        // Calculate the duration of the ORIGINAL time slot
-        const originalDurationMs = dbApt.endTime - dbApt.startTime;
-        const originalDurationMinutes = originalDurationMs / (60 * 1000);
+        const freedSegments = freedSegmentsAfterReschedule(
+          dbApt.startTime,
+          dbApt.endTime,
+          currentApt.startTime,
+          currentApt.endTime,
+        );
+        const longestFreed = getLongestFreedSegment(freedSegments);
+        const longestMs = longestFreed
+          ? longestFreed.end - longestFreed.start
+          : 0;
 
-        // If original duration >= 1.5 hours, this creates a significant gap
-        if (originalDurationMs >= MIN_GAP_MS) {
+        if (longestFreed && longestMs >= MIN_GAP_MS) {
+          const gapDurationMinutes = Math.round(longestMs / (60 * 1000));
           rescheduledWithGaps.push({
             appointment: currentApt,
             originalStartTime: dbApt.startTime,
             originalEndTime: dbApt.endTime,
-            gapDurationMinutes: Math.round(originalDurationMinutes),
+            gapStartTime: longestFreed.start,
+            gapEndTime: longestFreed.end,
+            gapDurationMinutes,
           });
 
           console.log(
             `Detected reschedule creating gap: ${currentApt.id} - ${currentApt.summary || 'Untitled'} ` +
-              `(${originalDurationMinutes.toFixed(0)} min gap)`,
+              `(${gapDurationMinutes} min contiguous freed in old slot)`,
           );
         }
 

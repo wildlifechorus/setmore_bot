@@ -5,11 +5,13 @@
   "main": "dist/index.js",
   "license": "MIT",
   "scripts": {
+    "postinstall": "npm rebuild better-sqlite3",
     "dev": "tsx src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "format": "prettier --write \"src/**/*.ts\"",
     "lint": "eslint src --ext .ts",
+    "test": "tsx --test src/monitor/intervals.test.ts",
     "type-check": "tsc --noEmit"
   },
   "dependencies": {

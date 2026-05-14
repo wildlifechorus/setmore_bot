@@ -134,8 +134,8 @@ export function formatMultipleCancellations(
 }
 
 /**
- * Format a rescheduled appointment that creates a gap into a Telegram message
- * @param rescheduled - The rescheduled appointment info
+ * Format a rescheduled appointment that creates a notify-worthy gap
+ * @param rescheduled - Includes gapStartTime / gapEndTime for the freed window
  * @param bookingUrl - URL to the booking page
  * @returns Formatted Telegram message
  */
@@ -143,10 +143,10 @@ export function formatRescheduleMessage(
   rescheduled: RescheduledAppointment,
   bookingUrl: string,
 ): string {
-  const date = formatDate(rescheduled.originalStartTime);
+  const date = formatDate(rescheduled.gapStartTime);
   const timeRange = formatTimeRange(
-    rescheduled.originalStartTime,
-    rescheduled.originalEndTime,
+    rescheduled.gapStartTime,
+    rescheduled.gapEndTime,
   );
 
   let message = '🎉 New Slot Available!\n\n';
@@ -179,18 +179,15 @@ export function formatMultipleReschedules(
   // Multiple reschedules
   let message = `🎉 ${rescheduled.length} New Slots Available!\n\n`;
 
-  // Sort by original start time
+  // Sort by freed-window start time
   const sorted = [...rescheduled].sort(
-    (a, b) => a.originalStartTime - b.originalStartTime,
+    (a, b) => a.gapStartTime - b.gapStartTime,
   );
 
   for (let i = 0; i < sorted.length; i++) {
     const item = sorted[i];
-    const date = formatDate(item.originalStartTime);
-    const timeRange = formatTimeRange(
-      item.originalStartTime,
-      item.originalEndTime,
-    );
+    const date = formatDate(item.gapStartTime);
+    const timeRange = formatTimeRange(item.gapStartTime, item.gapEndTime);
 
     message += `${i + 1}. ${date}\n`;
     message += `   🕐 ${timeRange}\n\n`;
