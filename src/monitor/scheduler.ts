@@ -16,7 +16,7 @@ import {
 import {
   sendMultipleCancellationNotifications,
   sendMultipleRescheduleNotifications,
-} from '../telegram/bot';
+} from '../whatsapp/client';
 
 /**
  * Scheduler configuration

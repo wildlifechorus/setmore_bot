@@ -1,240 +1,318 @@
 # Deployment Guide
 
-This guide covers deploying the Setmore Calendar Cancellation Monitor Bot to a production server.
+This guide covers deploying the Setmore Calendar Cancellation Monitor Bot to a
+production server. The bot uses [whatsapp-web.js](https://github.com/wwebjs/whatsapp-web.js),
+which drives a real WhatsApp account through headless Chromium. This means the
+server needs Chromium system libraries, more RAM than a typical Node.js bot
+(~300–500 MB), and a persistent login session.
+
+---
 
 ## Prerequisites
 
 - Node.js v18 or higher
 - Yarn package manager
-- Telegram bot token (from @BotFather)
-- Telegram channel ID
+- A **dedicated** WhatsApp phone number (not your personal account)
+- The WhatsApp account already belongs to the target group
 - SSH access to your server (for remote deployment)
 
-## Local Development Setup
+---
 
-### 1. Clone/Download the Project
+## Part 1, WhatsApp Setup (manual, one-time)
+
+Do this before touching the server.
+
+### 1.1 Dedicated phone number
+
+Get a SIM card or eSIM for the bot. Using your personal WhatsApp risks losing
+it if the account is flagged by WhatsApp.
+
+### 1.2 Install WhatsApp and verify the number
+
+Install WhatsApp (or WhatsApp Business) on a phone with the dedicated SIM and
+complete phone-number verification.
+
+### 1.3 Create the notification group
+
+1. Open WhatsApp → New Group.
+2. Add at least one contact (groups need ≥ 1 member to be created).
+3. Name the group something descriptive, e.g. "Kateryna Nails, Open Slots".
+4. Go to Group Settings → **Send messages → Only admins**.
+   This makes it broadcast-like: only the bot posts, members just read.
+5. Add the bot phone as a group **admin**.
+6. Share the group invite link with clients who want slot alerts.
+7. Keep the phone online periodically so the linked-device session stays alive
+   (WhatsApp allows up to ~14 days offline for a linked device).
+
+---
+
+## Part 2, Local Development Setup
+
+### 2.1 Clone / download the project
 
 ```bash
 cd /path/to/setmore_bot
 ```
 
-### 2. Install Dependencies
+### 2.2 Install dependencies
 
 ```bash
 yarn install
 ```
 
-### 3. Configure Environment Variables
+> `whatsapp-web.js` bundles Puppeteer which downloads a compatible Chromium
+> binary (~170 MB) on first install.
 
-Copy the example environment file:
+### 2.3 Configure environment variables
 
 ```bash
 cp .env.example .env
+nano .env
 ```
 
-Edit `.env` with your configuration:
+Fill in:
 
 ```env
-# Telegram Configuration
-TELEGRAM_BOT_TOKEN=your_bot_token_from_botfather
-TELEGRAM_CHANNEL_ID=@yourchannel
+# WhatsApp group ID, obtained in step 2.4 below
+WHATSAPP_GROUP_ID=
 
-# Setmore Calendar
-CALENDAR_URL=https://events.setmore.com/feeds/v1/Y2VjMzY4ZDE4ZWQ4MGVlMV8xNzY5NjkyMzQwODg4
+# Directory for the WhatsApp session (default shown)
+WHATSAPP_SESSION_PATH=./data/wwebjs_auth
 
-# Monitoring Settings
+# Setmore iCal feed (Setmore → Integrations → iCal)
+CALENDAR_URL=https://events.setmore.com/feeds/v1/...
+
+# Check interval in ms (default 60 000 = 1 minute)
 CHECK_INTERVAL_MS=60000
-DATABASE_PATH=./data/appointments.db
 
-# Optional: Logging
-LOG_LEVEL=info
+# SQLite database path (default shown)
+DATABASE_PATH=./data/appointments.db
 ```
 
-### 4. Run in Development Mode
+### 2.4 Log in and find the group ID
+
+```bash
+yarn list-groups
+```
+
+A QR code prints in the terminal. On the **bot phone**:
+**WhatsApp → Linked Devices → Link a Device** → scan the QR.
+
+After scanning, the script prints every group the bot account is in:
+
+```
+─────────────────────────────────────────────────────────────────────────
+Name : Kateryna Nails, Open Slots
+ID   : 1234567890-1609459200@g.us
+─────────────────────────────────────────────────────────────────────────
+```
+
+Copy the `@g.us` ID into `WHATSAPP_GROUP_ID` in `.env`.
+
+The session is saved to `./data/wwebjs_auth/`, subsequent runs (including the
+main bot) reuse it automatically with no QR needed.
+
+### 2.5 Run in development
 
 ```bash
 yarn dev
 ```
 
-This runs the bot with hot-reloading using `tsx`.
+Watch the logs. The first check initialises the database; no notifications are
+sent on the first run.
 
-### 5. Build for Production
+---
 
-```bash
-yarn build
-```
+## Part 3, Production Deployment
 
-This compiles TypeScript to JavaScript in the `dist/` directory.
+### Option A: Server with PM2 (recommended)
 
-## Getting Telegram Credentials
-
-### Create a Telegram Bot
-
-1. Open Telegram and search for [@BotFather](https://t.me/BotFather)
-2. Send `/newbot` command
-3. Follow the prompts to name your bot
-4. Copy the bot token (format: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
-5. Store this token in your `.env` file as `TELEGRAM_BOT_TOKEN`
-
-### Get Channel ID
-
-**Method 1: Using @username (for public channels)**
-- Use your channel's public username (e.g., `@yourchannel`)
-
-**Method 2: Using numeric ID (for private channels)**
-1. Add your bot to the channel as an administrator
-2. Send a test message to the channel
-3. Visit: `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
-4. Look for `"chat":{"id":-100...}` in the response
-5. Use the numeric ID (e.g., `-1001234567890`)
-
-### Add Bot to Channel
-
-1. Open your Telegram channel
-2. Go to channel settings → Administrators
-3. Add your bot as an administrator
-4. Grant permission to post messages
-
-## Production Deployment
-
-### Option 1: Server Deployment with PM2 (Recommended)
-
-#### 1. Install Node.js and Yarn on Server
+#### 3.1 Install Node.js and Yarn on the server
 
 ```bash
-# Install Node.js (v18+)
+# Node.js v18+
 curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
 sudo apt-get install -y nodejs
 
-# Install Yarn
+# Yarn
 npm install -g yarn
 ```
 
-#### 2. Install PM2 Globally
+#### 3.2 Install Chromium system dependencies
+
+`whatsapp-web.js` uses Puppeteer's bundled Chromium, but Chromium needs
+system libraries that are not installed by default on minimal server images.
+
+```bash
+sudo apt-get install -y \
+  libnss3 \
+  libatk1.0-0 \
+  libatk-bridge2.0-0 \
+  libcups2 \
+  libdrm2 \
+  libxkbcommon0 \
+  libxcomposite1 \
+  libxdamage1 \
+  libxrandr2 \
+  libgbm1 \
+  libasound2 \
+  libpangocairo-1.0-0 \
+  libpango-1.0-0 \
+  libcairo2 \
+  libx11-xcb1 \
+  libxcb-dri3-0 \
+  fonts-liberation \
+  xdg-utils
+```
+
+> If you are on a headless server without a display server, Chromium still
+> works in headless mode; the `--no-sandbox` and `--disable-setuid-sandbox`
+> flags are already set in the client code.
+
+#### 3.3 Install PM2
 
 ```bash
 yarn global add pm2
 ```
 
-#### 3. Upload Project Files
-
-Use SCP, rsync, or git to transfer files:
+#### 3.4 Upload project files
 
 ```bash
-# Using rsync
-rsync -avz --exclude 'node_modules' --exclude '.env' \
-  /local/path/setmore_bot user@server:/path/to/setmore_bot
+# Using rsync (excludes node_modules, .env, and session data)
+rsync -avz \
+  --exclude 'node_modules' \
+  --exclude '.env' \
+  --exclude 'data/' \
+  --exclude 'dist/' \
+  /local/path/setmore_bot/ user@server:/path/to/setmore_bot/
 
-# Or using git
+# Or via git
 ssh user@server
-cd /path/to
-git clone <repository-url> setmore_bot
-cd setmore_bot
+git clone <repository-url> /path/to/setmore_bot
+cd /path/to/setmore_bot
 ```
 
-#### 4. Install Dependencies on Server
+#### 3.5 Install dependencies on the server
 
 ```bash
 cd /path/to/setmore_bot
-yarn install --production
+yarn install
 ```
 
-#### 5. Create Production .env File
+#### 3.6 Create the data directory and .env
 
 ```bash
-nano .env
+mkdir -p data logs
+nano .env   # paste in your production .env values
+chmod 600 .env
 ```
 
-Add your production configuration (same format as `.env.example`).
-
-#### 6. Build the Application
+#### 3.7 Build
 
 ```bash
 yarn build
 ```
 
-#### 7. Create Logs Directory
+#### 3.8 Transfer the WhatsApp session
+
+If you logged in locally (step 2.4), copy the session to the server so you do
+not have to scan a QR again:
 
 ```bash
-mkdir -p logs
+rsync -avz ./data/wwebjs_auth/ user@server:/path/to/setmore_bot/data/wwebjs_auth/
 ```
 
-#### 8. Start with PM2
+**Alternatively**, perform the initial QR scan directly on the server.
+The QR is printed to stdout, so forward it via SSH with a PTY:
+
+```bash
+ssh -t user@server "cd /path/to/setmore_bot && node dist/index.js"
+# or in dev mode:
+ssh -t user@server "cd /path/to/setmore_bot && yarn dev"
+```
+
+Scan the QR from the terminal, wait for "WhatsApp client ready", then `Ctrl-C`.
+The session is saved. You can now run the bot under PM2.
+
+#### 3.9 Start with PM2
 
 ```bash
 pm2 start dist/index.js --name setmore-bot
-```
-
-#### 9. Save PM2 Configuration
-
-```bash
 pm2 save
 ```
 
-#### 10. Configure PM2 to Start on Boot
+#### 3.10 Configure PM2 to start on boot
 
 ```bash
 pm2 startup
-# Follow the instructions printed by the command
+# Run the command it prints (it will look like: sudo env PATH=... pm2 startup ...)
+pm2 save
 ```
 
-### PM2 Management Commands
+#### PM2 management commands
 
 ```bash
-# View status
-pm2 status
-
-# View logs
-pm2 logs setmore-bot
-
-# View real-time logs
-pm2 logs setmore-bot --lines 100
-
-# Restart the bot
-pm2 restart setmore-bot
-
-# Stop the bot
-pm2 stop setmore-bot
-
-# Monitor CPU/Memory
-pm2 monit
-
-# View detailed info
-pm2 show setmore-bot
-
-# Delete from PM2
-pm2 delete setmore-bot
+pm2 status                          # Check running status
+pm2 logs setmore-bot                # Tail logs
+pm2 logs setmore-bot --lines 200    # Last 200 lines
+pm2 restart setmore-bot             # Restart
+pm2 stop setmore-bot                # Stop without removing
+pm2 delete setmore-bot              # Remove from PM2
+pm2 monit                           # CPU/memory dashboard
 ```
 
-### Alternative: Docker Deployment
+---
 
-If you prefer Docker over PM2, create a `Dockerfile`:
+### Option B: Docker
+
+The Docker image needs Chromium system libraries. Use the `node:18` image
+(Debian-based) instead of `node:18-alpine`, since Alpine's musl libc does
+not support Chromium well.
+
+**Dockerfile:**
 
 ```dockerfile
-FROM node:18-alpine
+FROM node:18
 
 WORKDIR /app
 
-# Copy package files
-COPY package.json yarn.lock ./
+# Install Chromium system dependencies
+RUN apt-get update && apt-get install -y \
+    libnss3 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    libcups2 \
+    libdrm2 \
+    libxkbcommon0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libgbm1 \
+    libasound2 \
+    libpangocairo-1.0-0 \
+    libpango-1.0-0 \
+    libcairo2 \
+    libx11-xcb1 \
+    libxcb-dri3-0 \
+    fonts-liberation \
+    xdg-utils \
+  && rm -rf /var/lib/apt/lists/*
 
 # Install dependencies
-RUN yarn install --production
+COPY package.json yarn.lock ./
+RUN yarn install
 
-# Copy source code
+# Copy source and build
 COPY . .
-
-# Build TypeScript
 RUN yarn build
 
-# Create data directory
+# Runtime data directories
 RUN mkdir -p data logs
 
-# Start the application
 CMD ["node", "dist/index.js"]
 ```
 
-Create a `docker-compose.yml`:
+**docker-compose.yml:**
 
 ```yaml
 version: '3.8'
@@ -246,326 +324,311 @@ services:
     env_file:
       - .env
     volumes:
+      # Persist the SQLite DB and the WhatsApp session across container restarts
       - ./data:/app/data
       - ./logs:/app/logs
 ```
 
-Run with Docker:
+Initial QR scan with Docker (interactive, one-time):
 
 ```bash
-docker-compose up -d
+docker-compose run --rm setmore-bot node dist/index.js
+# Scan the QR, wait for "WhatsApp client ready", then Ctrl-C
 ```
 
-### Running on Local Machine (macOS)
+The session is persisted in `./data/wwebjs_auth/` via the volume mount.
+Subsequent `docker-compose up -d` starts will reuse it.
 
-Run continuously on your Mac:
+---
+
+### Running on a local Mac (development/low-volume)
 
 ```bash
-# Build the project
 yarn build
-
-# Start with PM2
 pm2 start dist/index.js --name setmore-bot
-
-# Configure to start on login
 pm2 startup launchd
 pm2 save
 ```
 
-## Testing the Deployment
+---
 
-### 1. Check Bot Logs
+## Part 4, Session Persistence
+
+The WhatsApp session is stored in `WHATSAPP_SESSION_PATH` (default
+`./data/wwebjs_auth/`). This is the most critical piece of state to protect:
+
+- **Back it up** alongside `appointments.db`.
+- **Do not wipe** `data/` on deploys, use rsync's `--exclude data/` instead
+  of blowing away the directory.
+- If the session is lost, the next startup prints a QR code and requires a
+  re-scan from the bot phone.
+- Linked-device sessions expire after roughly 14 days of the phone being
+  offline. Keep the bot phone connected to the internet periodically.
+
+### Back up the session
 
 ```bash
-# For PM2
-pm2 logs setmore-bot
+# Manual backup
+cp -r data/wwebjs_auth data/wwebjs_auth.backup.$(date +%Y%m%d_%H%M%S)
 
-# For Docker
-docker-compose logs -f
+# Cron job (daily backup)
+0 2 * * * cp -r /path/to/setmore_bot/data/wwebjs_auth \
+  /backup/location/wwebjs_auth.$(date +\%Y\%m\%d)
 ```
 
-### 2. Verify First Run
+---
 
-On first run, the bot should:
-- Initialize the database with current appointments
-- Not send any notifications
-- Log: "First run complete - no notifications sent"
+## Part 5, Testing the Deployment
 
-### 3. Test Cancellation Detection
+### 5.1 Check logs
 
-To test, you need to simulate a cancellation:
+```bash
+pm2 logs setmore-bot
+```
 
-1. Note the current appointments in the database
-2. Wait for the next check cycle
-3. If an appointment is removed from Setmore, the bot should detect it
-4. Check Telegram channel for notification
+### 5.2 Verify first run
 
-### 4. Monitor for Errors
+On the very first check the bot should log:
+```
+First run complete - no notifications sent
+```
 
-Watch the logs for any errors:
+This is correct, it seeds the database without alerting.
+
+### 5.3 Test the WhatsApp connection
+
+Temporarily add a call to `testBotConnection()` in `main()` just after
+`initClient()`, or run a quick script:
+
+```typescript
+import * as dotenv from 'dotenv';
+import { initClient, testBotConnection } from './src/whatsapp/client';
+
+dotenv.config();
+
+initClient({
+  groupId: process.env.WHATSAPP_GROUP_ID!,
+  sessionPath: process.env.WHATSAPP_SESSION_PATH || './data/wwebjs_auth',
+  bookingUrl: 'https://katerynails.setmore.com/',
+}).then(() => testBotConnection()).then(() => process.exit(0));
+```
+
+You should see "🤖 Setmore Bot is online..." posted to the group.
+
+### 5.4 Simulate a cancellation
+
+1. Note existing appointments in the database.
+2. Remove an appointment from Setmore.
+3. Wait for the next check cycle.
+4. A "🎉 New Slot Available!" message should appear in the WhatsApp group.
+
+### 5.5 Watch for errors
 
 ```bash
 pm2 logs setmore-bot --err
 ```
 
+---
+
 ## Troubleshooting
 
-### Bot Not Sending Messages
+### WhatsApp client fails to start
 
-**Check 1: Bot permissions**
-- Ensure bot is added as channel administrator
-- Verify bot has permission to post messages
+**Symptom:** `Error: Failed to launch the browser process`
 
-**Check 2: Channel ID format**
-- Public channels: `@channelname`
-- Private channels: `-1001234567890` (must include the minus sign)
+**Cause:** Missing Chromium system libraries.
 
-**Check 3: Test bot connection**
+**Fix:** Run the `apt-get install` block from step 3.2 and retry.
 
-Add a test script to verify Telegram connection:
+---
 
-```typescript
-import { initBot, testBotConnection } from './telegram/bot';
+### QR code keeps appearing on every restart
 
-initBot({
-  token: 'YOUR_TOKEN',
-  channelId: 'YOUR_CHANNEL_ID',
-  bookingUrl: 'https://katerynails.setmore.com/',
-});
+**Cause:** The session directory is not being persisted, or it was deleted.
 
-testBotConnection().then(() => {
-  console.log('Bot test successful!');
-}).catch(console.error);
-```
+**Fix:**
+- Confirm `WHATSAPP_SESSION_PATH` in `.env` points to a directory that
+  survives restarts.
+- If using Docker, confirm the `data/` volume is mounted.
+- Re-scan the QR once after fixing the path.
 
-### Calendar Not Fetching
+---
 
-**Check 1: Network connectivity**
+### Messages not arriving in the group
 
-```bash
-curl -H "User-Agent: Apple Calendar" -H "Accept: text/calendar" \
-  https://events.setmore.com/feeds/v1/Y2VjMzY4ZDE4ZWQ4MGVlMV8xNzY5NjkyMzQwODg4
-```
+**Check 1, Group ID correct?**
 
-**Check 2: URL is correct in .env**
+Run `yarn list-groups` again and compare the printed ID with `WHATSAPP_GROUP_ID`.
 
-Verify `CALENDAR_URL` in your `.env` file.
+**Check 2, Bot is group admin?**
 
-### Database Issues
+In the WhatsApp group → participants → verify the bot account shows "Admin".
 
-**Check 1: Database file permissions**
+**Check 3, Group send permission?**
 
-```bash
-ls -la data/appointments.db
-```
+Group Settings → Send messages → must be "Only admins" (and the bot must be an
+admin). If set to "All participants", non-admin sends still work; ensure the
+bot phone is in the group.
 
-**Check 2: Disk space**
+**Check 4, Session disconnected?**
+
+Look for `WhatsApp client disconnected` in the logs. Restart the bot; if the
+session is still valid it reconnects. If not, a new QR scan is required.
+
+---
+
+### `auth_failure` in logs
+
+The session is corrupted or expired. Delete the session directory and re-scan:
 
 ```bash
-df -h
+pm2 stop setmore-bot
+rm -rf data/wwebjs_auth
+pm2 start setmore-bot   # QR code will appear in pm2 logs setmore-bot
 ```
 
-**Reset database (caution: deletes all data)**
+Scan the QR interactively:
+
+```bash
+pm2 stop setmore-bot
+node dist/index.js      # QR prints to terminal
+# Scan, wait for "WhatsApp client ready", Ctrl-C
+pm2 start setmore-bot
+```
+
+---
+
+### Calendar not fetching
+
+```bash
+curl -H "User-Agent: Apple Calendar" \
+     -H "Accept: text/calendar" \
+     "$CALENDAR_URL"
+```
+
+If that returns data, the URL is fine. Check your `.env` value.
+
+---
+
+### High memory usage
+
+Chromium uses ~300–500 MB RSS. This is expected. If the server has less than
+1 GB RAM, consider increasing swap or upgrading the instance.
+
+---
+
+## Maintenance
+
+### Update dependencies
+
+```bash
+yarn outdated
+yarn upgrade
+yarn build
+pm2 restart setmore-bot
+```
+
+When updating `whatsapp-web.js`, test in development first, major releases
+sometimes require session re-authentication.
+
+### Rotate logs
+
+PM2 handles log rotation via `pm2-logrotate`:
+
+```bash
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:retain 7
+```
+
+### Back up the database
+
+```bash
+# Manual
+cp data/appointments.db data/appointments.db.$(date +%Y%m%d_%H%M%S)
+
+# Cron (daily at 02:00)
+0 2 * * * cp /path/to/setmore_bot/data/appointments.db \
+  /backup/appointments.db.$(date +\%Y\%m\%d)
+```
+
+### Reset the database (caution, deletes all state)
 
 ```bash
 pm2 stop setmore-bot
 rm data/appointments.db
-pm2 start setmore-bot
+pm2 start setmore-bot   # first run re-seeds with no notifications
 ```
 
-## Maintenance
+---
 
-### Regular Maintenance Tasks
+## Security Best Practices
 
-**1. Monitor Disk Space**
+1. **Never commit `.env`**, already in `.gitignore`.
+2. **Restrict file permissions**:
+   ```bash
+   chmod 600 .env
+   chmod 700 data/wwebjs_auth
+   chmod 600 data/appointments.db
+   ```
+3. **Use a firewall**, the bot makes outbound connections only; no inbound
+   ports need to be open.
+4. **Keep dependencies updated**, `yarn upgrade` regularly.
+5. **Dedicated WhatsApp number**, isolates ban risk from your personal account.
 
-The database and logs can grow over time:
+---
 
-```bash
-# Check database size
-ls -lh data/appointments.db
+## Performance Tuning
 
-# Check log size
-ls -lh logs/
+### Adjust the check interval
+
+```env
+CHECK_INTERVAL_MS=300000   # 5 minutes (lower API load)
+CHECK_INTERVAL_MS=30000    # 30 seconds (faster alerts)
 ```
 
-**2. Log Rotation**
+### Memory
 
-PM2 handles log rotation automatically, but you can also use logrotate:
+Chromium is the dominant memory consumer. Node.js heap itself stays at
+~50–100 MB. No SQLite tuning is needed for typical volumes.
 
-```bash
-# /etc/logrotate.d/setmore-bot
-/path/to/setmore_bot/logs/*.log {
-    daily
-    rotate 7
-    compress
-    delaycompress
-    missingok
-    notifempty
-}
-```
-
-**3. Database Cleanup**
-
-Old cancelled appointments can be cleaned up periodically. You can add a cron job:
-
-```bash
-# Run cleanup script weekly
-0 0 * * 0 node /path/to/cleanup-script.js
-```
-
-**4. Update Dependencies**
-
-```bash
-# Check for outdated packages
-yarn outdated
-
-# Update all dependencies
-yarn upgrade
-
-# Rebuild and restart
-yarn build
-pm2 restart setmore-bot
-```
-
-### Updating the Bot
-
-```bash
-# Stop the bot
-pm2 stop setmore-bot
-
-# Update code (via git or file transfer)
-git pull
-# or
-rsync -avz local/path/ server:/remote/path/
-
-# Install new dependencies
-yarn install --production
-
-# Rebuild
-yarn build
-
-# Restart
-pm2 restart setmore-bot
-
-# Or delete and start fresh
-pm2 delete setmore-bot
-pm2 start dist/index.js --name setmore-bot
-pm2 save
-```
+---
 
 ## Monitoring
 
-### Set Up Alerts
-
-Consider setting up monitoring alerts:
-
-1. **PM2 Plus** (formerly Keymetrics)
-   - Real-time monitoring dashboard
-   - Email/SMS alerts on crashes
-   - https://pm2.io/
-
-2. **UptimeRobot**
-   - Monitor if the bot is running
-   - Free tier available
-   - https://uptimerobot.com/
-
-3. **Log Monitoring**
-   - Set up alerts for ERROR logs
-   - Use tools like Papertrail or Loggly
-
-### Health Check Script
-
-Create a simple health check:
+### Health check script
 
 ```bash
 #!/bin/bash
 # health-check.sh
-
 if pm2 list | grep -q "setmore-bot.*online"; then
-    echo "Bot is running"
-    exit 0
+  echo "Bot is running"
+  exit 0
 else
-    echo "Bot is not running!"
-    exit 1
+  echo "Bot is NOT running!"
+  exit 1
 fi
 ```
 
-Run it with cron:
+Cron (every 5 minutes):
 
 ```bash
-# Check every 5 minutes
-*/5 * * * * /path/to/health-check.sh || echo "Bot down!" | mail -s "Alert: Bot Down" your@email.com
+*/5 * * * * /path/to/health-check.sh || \
+  echo "Setmore bot down!" | mail -s "Alert: Bot Down" your@email.com
 ```
 
-## Security Best Practices
-
-1. **Never commit `.env` file** - Already in `.gitignore`
-2. **Use environment-specific configs** - Separate dev/prod `.env` files
-3. **Restrict file permissions**:
-   ```bash
-   chmod 600 .env
-   chmod 600 data/appointments.db
-   ```
-4. **Use firewall rules** - Restrict unnecessary ports
-5. **Keep dependencies updated** - Regular `yarn upgrade`
-6. **Monitor logs for suspicious activity**
-
-## Performance Tuning
-
-### Adjust Check Interval
-
-For less frequent checks (reduces API calls):
-
-```env
-CHECK_INTERVAL_MS=300000  # 5 minutes
-```
-
-For more frequent checks:
-
-```env
-CHECK_INTERVAL_MS=30000  # 30 seconds
-```
-
-### Database Optimization
-
-The bot uses SQLite with WAL mode for better performance. No additional tuning needed for typical use.
-
-## Backup
-
-### Backup the Database
-
-```bash
-# Create backup
-cp data/appointments.db data/appointments.db.backup
-
-# Or with timestamp
-cp data/appointments.db data/appointments.db.$(date +%Y%m%d_%H%M%S)
-```
-
-### Automate Backups
-
-```bash
-# Daily backup cron job
-0 2 * * * cp /path/to/setmore_bot/data/appointments.db /backup/location/appointments.db.$(date +\%Y\%m\%d)
-```
-
-## Support
-
-For issues or questions:
-1. Check logs: `pm2 logs setmore-bot`
-2. Verify configuration in `.env`
-3. Test network connectivity to Setmore and Telegram
-4. Review this documentation
+---
 
 ## Summary
 
-Your bot is now deployed and monitoring your Setmore calendar for cancellations! 🎉
+Your bot is now deployed and monitoring your Setmore calendar for cancellations.
 
 Key points:
-- ✅ Checks calendar every minute (configurable)
-- ✅ Detects cancellations automatically
-- ✅ Sends beautiful notifications to Telegram
-- ✅ Runs continuously with PM2
-- ✅ Auto-restarts on failure
-- ✅ Starts on system boot
+- Checks the calendar every minute (configurable)
+- Detects cancellations and reschedules automatically
+- Posts WhatsApp-formatted notifications to the group
+- Runs continuously with PM2 and auto-restarts on failure
+- Starts on system boot via `pm2 startup`
+- **Keep `data/wwebjs_auth/` backed up**, losing it forces a QR re-scan
+- **Keep the bot phone online**, Linked Device sessions expire after ~14 days
+  of the phone being offline

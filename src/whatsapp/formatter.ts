@@ -1,16 +1,17 @@
 /**
- * Telegram message formatter
- * Formats appointment cancellations and reschedules into user-friendly messages
+ * WhatsApp message formatter
+ * Formats appointment cancellations and reschedules into user-friendly messages.
+ * Uses WhatsApp text markup: *bold*, _italic_, ~strikethrough~.
  */
 
 import { Appointment } from '../calendar/types';
 import { RescheduledAppointment } from '../monitor/detector';
 
 /**
- * Format a date with timezone awareness
+ * Format a date with timezone awareness.
  * @param timestamp - Unix timestamp in milliseconds
  * @param timezone - IANA timezone identifier (default: Europe/Lisbon)
- * @returns Formatted date string
+ * @returns Formatted date string, e.g. "Monday, January 29, 2026"
  */
 function formatDate(
   timestamp: number,
@@ -18,23 +19,20 @@ function formatDate(
 ): string {
   const date = new Date(timestamp);
 
-  // Format: "Monday, January 29, 2026"
-  const dateStr = date.toLocaleDateString('en-US', {
+  return date.toLocaleDateString('en-US', {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
     day: 'numeric',
     timeZone: timezone,
   });
-
-  return dateStr;
 }
 
 /**
- * Format a time with timezone awareness
+ * Format a time with timezone awareness.
  * @param timestamp - Unix timestamp in milliseconds
  * @param timezone - IANA timezone identifier (default: Europe/Lisbon)
- * @returns Formatted time string (HH:MM)
+ * @returns Formatted time string, e.g. "14:30"
  */
 function formatTime(
   timestamp: number,
@@ -42,39 +40,34 @@ function formatTime(
 ): string {
   const date = new Date(timestamp);
 
-  // Format: "14:30"
-  const timeStr = date.toLocaleTimeString('en-US', {
+  return date.toLocaleTimeString('en-US', {
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
     timeZone: timezone,
   });
-
-  return timeStr;
 }
 
 /**
- * Format a time range
+ * Format a time range from two timestamps.
  * @param startTime - Start timestamp in milliseconds
  * @param endTime - End timestamp in milliseconds
  * @param timezone - IANA timezone identifier (default: Europe/Lisbon)
- * @returns Formatted time range string (e.g., "14:30 - 16:00")
+ * @returns Formatted range string, e.g. "14:30 - 16:00"
  */
 function formatTimeRange(
   startTime: number,
   endTime: number,
   timezone: string = 'Europe/Lisbon',
 ): string {
-  const start = formatTime(startTime, timezone);
-  const end = formatTime(endTime, timezone);
-  return `${start} - ${end}`;
+  return `${formatTime(startTime, timezone)} - ${formatTime(endTime, timezone)}`;
 }
 
 /**
- * Format a cancelled appointment into a Telegram message
+ * Format a single cancelled appointment into a WhatsApp message.
  * @param appointment - The cancelled appointment
  * @param bookingUrl - URL to the booking page
- * @returns Formatted Telegram message
+ * @returns Formatted WhatsApp message string
  */
 export function formatCancellationMessage(
   appointment: Appointment,
@@ -83,9 +76,9 @@ export function formatCancellationMessage(
   const date = formatDate(appointment.startTime);
   const timeRange = formatTimeRange(appointment.startTime, appointment.endTime);
 
-  let message = '🎉 New Slot Available!\n\n';
-  message += `📅 Date: ${date}\n`;
-  message += `🕐 Time: ${timeRange} (Lisbon time)\n`;
+  let message = '🎉 *New Slot Available!*\n\n';
+  message += `📅 *Date:* ${date}\n`;
+  message += `🕐 *Time:* ${timeRange} (Lisbon time)\n`;
   message += `\nBook now: ${bookingUrl}\n`;
   message += '\n#AvailableSlot';
 
@@ -93,10 +86,11 @@ export function formatCancellationMessage(
 }
 
 /**
- * Format multiple cancelled appointments into a single message
+ * Format multiple cancelled appointments into a single WhatsApp message.
+ * Falls through to the single-message formatter when only one appointment.
  * @param appointments - Array of cancelled appointments
  * @param bookingUrl - URL to the booking page
- * @returns Formatted Telegram message
+ * @returns Formatted WhatsApp message string
  */
 export function formatMultipleCancellations(
   appointments: Appointment[],
@@ -110,10 +104,8 @@ export function formatMultipleCancellations(
     return formatCancellationMessage(appointments[0], bookingUrl);
   }
 
-  // Multiple cancellations
-  let message = `🎉 ${appointments.length} New Slots Available!\n\n`;
+  let message = `🎉 *${appointments.length} New Slots Available!*\n\n`;
 
-  // Sort by start time
   const sortedApts = [...appointments].sort(
     (a, b) => a.startTime - b.startTime,
   );
@@ -123,7 +115,7 @@ export function formatMultipleCancellations(
     const date = formatDate(apt.startTime);
     const timeRange = formatTimeRange(apt.startTime, apt.endTime);
 
-    message += `${i + 1}. ${date}\n`;
+    message += `${i + 1}. *${date}*\n`;
     message += `   🕐 ${timeRange}\n\n`;
   }
 
@@ -134,10 +126,10 @@ export function formatMultipleCancellations(
 }
 
 /**
- * Format a rescheduled appointment that creates a notify-worthy gap
+ * Format a rescheduled appointment that creates a notify-worthy gap.
  * @param rescheduled - Includes gapStartTime / gapEndTime for the freed window
  * @param bookingUrl - URL to the booking page
- * @returns Formatted Telegram message
+ * @returns Formatted WhatsApp message string
  */
 export function formatRescheduleMessage(
   rescheduled: RescheduledAppointment,
@@ -149,9 +141,9 @@ export function formatRescheduleMessage(
     rescheduled.gapEndTime,
   );
 
-  let message = '🎉 New Slot Available!\n\n';
-  message += `📅 Date: ${date}\n`;
-  message += `🕐 Time: ${timeRange} (Lisbon time)\n`;
+  let message = '🎉 *New Slot Available!*\n\n';
+  message += `📅 *Date:* ${date}\n`;
+  message += `🕐 *Time:* ${timeRange} (Lisbon time)\n`;
   message += `\nBook now: ${bookingUrl}\n`;
   message += '\n#AvailableSlot #Reschedule';
 
@@ -159,10 +151,11 @@ export function formatRescheduleMessage(
 }
 
 /**
- * Format multiple rescheduled appointments into a single message
+ * Format multiple rescheduled appointments into a single WhatsApp message.
+ * Falls through to the single-message formatter when only one item.
  * @param rescheduled - Array of rescheduled appointments
  * @param bookingUrl - URL to the booking page
- * @returns Formatted Telegram message
+ * @returns Formatted WhatsApp message string
  */
 export function formatMultipleReschedules(
   rescheduled: RescheduledAppointment[],
@@ -176,10 +169,8 @@ export function formatMultipleReschedules(
     return formatRescheduleMessage(rescheduled[0], bookingUrl);
   }
 
-  // Multiple reschedules
-  let message = `🎉 ${rescheduled.length} New Slots Available!\n\n`;
+  let message = `🎉 *${rescheduled.length} New Slots Available!*\n\n`;
 
-  // Sort by freed-window start time
   const sorted = [...rescheduled].sort(
     (a, b) => a.gapStartTime - b.gapStartTime,
   );
@@ -189,7 +180,7 @@ export function formatMultipleReschedules(
     const date = formatDate(item.gapStartTime);
     const timeRange = formatTimeRange(item.gapStartTime, item.gapEndTime);
 
-    message += `${i + 1}. ${date}\n`;
+    message += `${i + 1}. *${date}*\n`;
     message += `   🕐 ${timeRange}\n\n`;
   }
 
