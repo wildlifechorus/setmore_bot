@@ -1,3 +1,6 @@
+# Local-only scripts (not for repo)
+deploy.sh
+
 # Dependencies
 node_modules/
 yarn-error.log
