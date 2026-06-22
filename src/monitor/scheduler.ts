@@ -14,9 +14,9 @@ import {
   initializeAppointments,
 } from './detector';
 import {
-  sendMultipleCancellationNotifications,
-  sendMultipleRescheduleNotifications,
-} from '../whatsapp/client';
+  broadcastCancellations,
+  broadcastReschedules,
+} from '../notifications';
 
 /**
  * Scheduler configuration
@@ -79,7 +79,7 @@ async function performCheck(
       console.log(
         `Sending notifications for ${result.cancelled.length} cancellation(s)...`,
       );
-      await sendMultipleCancellationNotifications(result.cancelled, true);
+      await broadcastCancellations(result.cancelled, true);
       console.log('Cancellation notifications sent successfully');
     }
 
@@ -88,10 +88,7 @@ async function performCheck(
       console.log(
         `Sending notifications for ${result.rescheduledWithGaps.length} reschedule(s) creating gaps...`,
       );
-      await sendMultipleRescheduleNotifications(
-        result.rescheduledWithGaps,
-        true,
-      );
+      await broadcastReschedules(result.rescheduledWithGaps, true);
       console.log('Reschedule notifications sent successfully');
     }
 

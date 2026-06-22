@@ -7,12 +7,12 @@
  * a notification is triggered.
  *
  * Modes:
- *   --dry-run  (default)  Print the formatted message; do NOT connect WhatsApp.
- *   --send                Connect WhatsApp and post the message to the group.
+ *   --dry-run  (default)  Print the formatted message; do NOT connect anything.
+ *   --send                Connect every configured channel and post the message.
  *
  * Usage:
  *   yarn simulate            # dry-run
- *   yarn simulate --send     # real WhatsApp send
+ *   yarn simulate --send     # real send to all active channels
  *
  * The fake appointment is cleaned up from the DB automatically after the run.
  */
@@ -20,7 +20,11 @@
 import * as dotenv from 'dotenv';
 import * as path from 'path';
 import { initDatabase, insertAppointment, markAsCancelled, closeDatabase } from '../database/db';
-import { formatCancellationMessage } from '../whatsapp/formatter';
+import {
+  createMessageFormatter,
+  whatsappStyle,
+  telegramHtmlStyle,
+} from '../notifications/formatter';
 import { Appointment } from '../calendar/types';
 
 dotenv.config();
@@ -53,40 +57,64 @@ function buildFakeAppointment(): Appointment {
 }
 
 async function runDryMode(apt: Appointment): Promise<void> {
-  const message = formatCancellationMessage(apt, BOOKING_URL);
+  const waMessage = createMessageFormatter(whatsappStyle).formatCancellationMessage(
+    apt,
+    BOOKING_URL,
+  );
+  const tgMessage = createMessageFormatter(
+    telegramHtmlStyle,
+  ).formatCancellationMessage(apt, BOOKING_URL);
 
   console.log('\n' + '═'.repeat(60));
   console.log('  DRY RUN — WhatsApp message that would be sent:');
   console.log('═'.repeat(60));
-  console.log(message);
+  console.log(waMessage);
+  console.log('═'.repeat(60));
+  console.log('  DRY RUN — Telegram message that would be sent (HTML):');
+  console.log('═'.repeat(60));
+  console.log(tgMessage);
   console.log('═'.repeat(60) + '\n');
-  console.log('Run with --send to post this to the actual WhatsApp group.\n');
+  console.log('Run with --send to post this to all active channels.\n');
 }
 
 async function runSendMode(apt: Appointment): Promise<void> {
-  const groupId = process.env.WHATSAPP_GROUP_ID;
-  const sessionPath = process.env.WHATSAPP_SESSION_PATH || './data/wwebjs_auth';
+  // Resolve channels from env presence, mirroring the main app.
+  const whatsappGroupId = process.env.WHATSAPP_GROUP_ID;
+  const whatsapp = whatsappGroupId
+    ? {
+        groupId: whatsappGroupId,
+        sessionPath:
+          process.env.WHATSAPP_SESSION_PATH || './data/wwebjs_auth',
+      }
+    : undefined;
 
-  if (!groupId) {
+  const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+  const telegramChannelId = process.env.TELEGRAM_CHANNEL_ID;
+  const telegram =
+    telegramToken && telegramChannelId
+      ? { token: telegramToken, channelId: telegramChannelId }
+      : undefined;
+
+  if (!whatsapp && !telegram) {
     console.error(
-      '\n❌ WHATSAPP_GROUP_ID is not set in .env — cannot send.\n' +
-        '   Run yarn list-groups first to get your group ID.\n',
+      '\n❌ No channel configured — set WHATSAPP_GROUP_ID and/or ' +
+        'TELEGRAM_BOT_TOKEN + TELEGRAM_CHANNEL_ID in .env.\n',
     );
     process.exit(1);
   }
 
-  // Dynamic import so dry-run mode never loads Puppeteer.
-  const { initClient, sendCancellationNotification, destroyClient } =
-    await import('../whatsapp/client');
+  // Dynamic import so dry-run mode never loads Puppeteer / the Telegram client.
+  const { initNotifiers, broadcastCancellations, destroyNotifiers } =
+    await import('../notifications');
 
-  console.log('\nConnecting to WhatsApp (may take up to 60s)...');
-  await initClient({ groupId, sessionPath, bookingUrl: BOOKING_URL });
+  console.log('\nConnecting to channels (WhatsApp may take up to 60s)...');
+  await initNotifiers({ bookingUrl: BOOKING_URL, whatsapp, telegram });
 
   console.log('Sending test cancellation notification...');
-  await sendCancellationNotification(apt);
-  console.log('\n✅ Message sent! Check your WhatsApp group.\n');
+  await broadcastCancellations([apt], true);
+  console.log('\n✅ Message sent! Check your active channels.\n');
 
-  await destroyClient();
+  await destroyNotifiers();
 }
 
 async function main(): Promise<void> {

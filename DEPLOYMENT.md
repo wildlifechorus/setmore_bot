@@ -1,10 +1,27 @@
 # Deployment Guide
 
 This guide covers deploying the Setmore Calendar Cancellation Monitor Bot to a
-production server. The bot uses [whatsapp-web.js](https://github.com/wwebjs/whatsapp-web.js),
-which drives a real WhatsApp account through headless Chromium. This means the
-server needs Chromium system libraries, more RAM than a typical Node.js bot
-(~300–500 MB), and a persistent login session.
+production server. The bot can notify **WhatsApp and/or Telegram**; each channel
+is enabled automatically when its env vars are present, and at least one is
+required.
+
+- **WhatsApp** uses [whatsapp-web.js](https://github.com/wwebjs/whatsapp-web.js),
+  which drives a real WhatsApp account through headless Chromium. When WhatsApp
+  is enabled the server needs Chromium system libraries, more RAM than a typical
+  Node.js bot (~300–500 MB), and a persistent login session.
+- **Telegram** uses the official Bot API via
+  [node-telegram-bot-api](https://github.com/yagop/node-telegram-bot-api). It has
+  no Chromium/session requirements; you only need a bot token and a channel ID.
+
+If you only deploy Telegram, you can skip every Chromium / QR / session step in
+this guide.
+
+Channel enablement:
+
+| Channel | Enabled when these env vars are set |
+|---|---|
+| WhatsApp | `WHATSAPP_GROUP_ID` |
+| Telegram | `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHANNEL_ID` |
 
 ---
 
@@ -12,15 +29,17 @@ server needs Chromium system libraries, more RAM than a typical Node.js bot
 
 - Node.js v18 or higher
 - Yarn package manager
-- A **dedicated** WhatsApp phone number (not your personal account)
-- The WhatsApp account already belongs to the target group
 - SSH access to your server (for remote deployment)
+- For WhatsApp: a **dedicated** phone number (not your personal account),
+  already a member of the target group
+- For Telegram: a bot token from @BotFather and a channel the bot administers
 
 ---
 
 ## Part 1, WhatsApp Setup (manual, one-time)
 
-Do this before touching the server.
+Skip this part if you are only using Telegram. Do this before touching the
+server.
 
 ### 1.1 Dedicated phone number
 
@@ -43,6 +62,24 @@ complete phone-number verification.
 6. Share the group invite link with clients who want slot alerts.
 7. Keep the phone online periodically so the linked-device session stays alive
    (WhatsApp allows up to ~14 days offline for a linked device).
+
+---
+
+## Part 1b, Telegram Setup (manual, one-time)
+
+Skip this part if you are only using WhatsApp.
+
+1. In Telegram, message [@BotFather](https://t.me/BotFather), send `/newbot`,
+   and follow the prompts. Copy the **bot token**
+   (format `123456789:ABCdef...`).
+2. Create the channel (or group) that should receive slot alerts.
+3. Add the bot as an **administrator** of that channel with permission to post.
+4. Determine the channel ID:
+   - Public channel: use `@yourchannelname`.
+   - Private channel: post any message in it, then open
+     `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` and read the
+     `"chat":{"id":-100...}` value.
+5. Put both values in `.env` as `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHANNEL_ID`.
 
 ---
 
@@ -70,14 +107,18 @@ cp .env.example .env
 nano .env
 ```
 
-Fill in:
+Fill in at least one channel (WhatsApp, Telegram, or both):
 
 ```env
-# WhatsApp group ID, obtained in step 2.4 below
+# --- WhatsApp (enabled when WHATSAPP_GROUP_ID is set) ---
+# Group ID, obtained in step 2.4 below
 WHATSAPP_GROUP_ID=
-
 # Directory for the WhatsApp session (default shown)
 WHATSAPP_SESSION_PATH=./data/wwebjs_auth
+
+# --- Telegram (enabled when BOTH are set, from Part 1b) ---
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHANNEL_ID=
 
 # Setmore iCal feed (Setmore → Integrations → iCal)
 CALENDAR_URL=https://events.setmore.com/feeds/v1/...
@@ -89,7 +130,7 @@ CHECK_INTERVAL_MS=60000
 DATABASE_PATH=./data/appointments.db
 ```
 
-### 2.4 Log in and find the group ID
+### 2.4 Log in and find the group ID (WhatsApp only)
 
 ```bash
 yarn list-groups
@@ -395,32 +436,28 @@ First run complete - no notifications sent
 
 This is correct, it seeds the database without alerting.
 
-### 5.3 Test the WhatsApp connection
+### 5.3 Test the channels
 
-Temporarily add a call to `testBotConnection()` in `main()` just after
-`initClient()`, or run a quick script:
+Run the built-in simulator, which posts a test cancellation to every active
+channel and then cleans up after itself:
 
-```typescript
-import * as dotenv from 'dotenv';
-import { initClient, testBotConnection } from './src/whatsapp/client';
+```bash
+# Dry run: print the WhatsApp and Telegram message bodies, no send
+yarn simulate
 
-dotenv.config();
-
-initClient({
-  groupId: process.env.WHATSAPP_GROUP_ID!,
-  sessionPath: process.env.WHATSAPP_SESSION_PATH || './data/wwebjs_auth',
-  bookingUrl: 'https://katerynails.setmore.com/',
-}).then(() => testBotConnection()).then(() => process.exit(0));
+# Real send to all active channels
+yarn simulate:send
 ```
 
-You should see "🤖 Setmore Bot is online..." posted to the group.
+You should see "🎉 New Slot Available!" arrive in the WhatsApp group and/or the
+Telegram channel.
 
-### 5.4 Simulate a cancellation
+### 5.4 Simulate a cancellation end-to-end
 
 1. Note existing appointments in the database.
 2. Remove an appointment from Setmore.
 3. Wait for the next check cycle.
-4. A "🎉 New Slot Available!" message should appear in the WhatsApp group.
+4. A "🎉 New Slot Available!" message should appear on every active channel.
 
 ### 5.5 Watch for errors
 

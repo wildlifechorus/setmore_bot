@@ -1,7 +1,7 @@
 {
   "name": "setmore_bot",
   "version": "1.0.0",
-  "description": "WhatsApp bot that monitors Setmore calendar for cancellations and posts to a group",
+  "description": "Bot that monitors Setmore calendar for cancellations and posts to WhatsApp and/or Telegram",
   "main": "dist/index.js",
   "license": "MIT",
   "scripts": {
@@ -23,6 +23,7 @@
     "dotenv": "^16.4.7",
     "node-fetch": "2.7.0",
     "node-ical": "^0.19.0",
+    "node-telegram-bot-api": "^0.66.0",
     "qrcode-terminal": "^0.12.0",
     "whatsapp-web.js": "^1.34.7"
   },
@@ -30,6 +31,7 @@
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.5",
     "@types/node-fetch": "^2.6.13",
+    "@types/node-telegram-bot-api": "^0.64.7",
     "@types/qrcode-terminal": "^0.12.2",
     "@typescript-eslint/eslint-plugin": "^8.20.0",
     "@typescript-eslint/parser": "^8.20.0",

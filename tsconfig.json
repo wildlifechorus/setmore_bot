@@ -18,7 +18,13 @@
     "noUnusedParameters": true,
     "noImplicitReturns": true,
     "noFallthroughCasesInSwitch": true,
-    "types": ["node", "node-fetch", "better-sqlite3", "qrcode-terminal"]
+    "types": [
+      "node",
+      "node-fetch",
+      "better-sqlite3",
+      "qrcode-terminal",
+      "node-telegram-bot-api"
+    ]
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
