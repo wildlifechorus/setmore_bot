@@ -30,6 +30,12 @@ export interface WhatsAppConfig {
   bookingUrl: string;
 }
 
+/** How long to wait between reconnect attempts (ms). */
+const RECONNECT_DELAY_MS = 15_000;
+
+/** Maximum number of consecutive reconnect attempts before giving up. */
+const MAX_RECONNECT_ATTEMPTS = 5;
+
 /**
  * Create a WhatsApp Notifier bound to the given configuration.
  * @param config - WhatsApp channel configuration
@@ -38,83 +44,169 @@ export interface WhatsAppConfig {
 export function createWhatsAppNotifier(config: WhatsAppConfig): Notifier {
   const formatter = createMessageFormatter(whatsappStyle);
   let client: Client | null = null;
+  let isReady = false;
+  let reconnectAttempts = 0;
+  let destroyed = false;
 
   /**
-   * Return the active client, throwing if init() has not completed.
+   * Spin up a fresh Client instance and wire all event handlers.
+   * Resolves when the `ready` event fires; rejects on `auth_failure`.
+   */
+  function createAndInitClient(): Promise<void> {
+    return new Promise((resolve, reject) => {
+      client = new Client({
+        authStrategy: new LocalAuth({ dataPath: config.sessionPath }),
+        puppeteer: {
+          headless: true,
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--disable-gpu',
+          ],
+        },
+      });
+
+      client.on('qr', (qr: string) => {
+        console.log(
+          '\n📱 Scan the QR code below with WhatsApp on the bot phone:',
+        );
+        console.log('   (WhatsApp → Linked Devices → Link a Device)\n');
+        qrcode.generate(qr, { small: true });
+      });
+
+      client.on('authenticated', () => {
+        console.log('[WhatsApp] Authenticated — session saved');
+      });
+
+      client.on('ready', () => {
+        console.log('[WhatsApp] Client is ready');
+        isReady = true;
+        reconnectAttempts = 0;
+        resolve();
+      });
+
+      client.on('auth_failure', (msg: string) => {
+        console.error('[WhatsApp] Authentication failed:', msg);
+        isReady = false;
+        client = null;
+        reject(new Error(`WhatsApp auth failure: ${msg}`));
+      });
+
+      // Null out the stale client reference so subsequent sendMessage calls
+      // immediately surface a clear "not initialised" error instead of a
+      // cryptic Chromium protocol error. Then schedule a reconnect.
+      client.on('disconnected', (reason: string) => {
+        triggerReconnect(`Client disconnected: ${reason}`);
+      });
+
+      console.log('[WhatsApp] Initialising client (this may take a moment)...');
+      client.initialize().catch(reject);
+    });
+  }
+
+  /**
+   * Return the active client, throwing if init() has not completed or the
+   * client has disconnected and not yet reconnected.
    */
   function getClient(): Client {
-    if (!client) {
-      throw new Error('WhatsApp client not initialised. Call init() first.');
+    if (!client || !isReady) {
+      throw new Error(
+        'WhatsApp client is not ready. ' +
+          (reconnectAttempts > 0
+            ? `Reconnect attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} in progress.`
+            : 'Call init() first.'),
+      );
     }
 
     return client;
   }
 
   /**
+   * Trigger a reconnect cycle from within a send-time error handler.
+   * Marks the client as not ready, nulls the stale reference, and schedules
+   * a fresh init — mirroring what the `disconnected` event handler does.
+   * @param reason - Human-readable description logged before reconnecting
+   */
+  function triggerReconnect(reason: string): void {
+    console.warn(`[WhatsApp] ${reason} — triggering reconnect.`);
+    isReady = false;
+    client = null;
+
+    if (destroyed) {
+      return;
+    }
+
+    reconnectAttempts += 1;
+    if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+      console.error(
+        `[WhatsApp] Giving up after ${MAX_RECONNECT_ATTEMPTS} reconnect attempts.`,
+      );
+      return;
+    }
+
+    console.log(
+      `[WhatsApp] Reconnect attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS} ` +
+        `in ${RECONNECT_DELAY_MS / 1000}s…`,
+    );
+
+    setTimeout(() => {
+      if (destroyed) {
+        return;
+      }
+
+      console.log('[WhatsApp] Reconnecting…');
+      createAndInitClient().catch((err) => {
+        console.error('[WhatsApp] Reconnect failed:', err);
+      });
+    }, RECONNECT_DELAY_MS);
+  }
+
+  /**
    * Send a text message to the configured WhatsApp group.
    * Waits briefly after the send so the underlying Chromium session can flush
    * the message over the network before the process may exit.
+   * Detects Chromium session failures (detached frame, session destroyed) and
+   * triggers an automatic reconnect so future sends recover without a restart.
    * @param message - WhatsApp-markup message body
    */
   async function sendMessage(message: string): Promise<void> {
-    const sent = await getClient().sendMessage(config.groupId, message);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const msgId =
+    try {
+      const sent = await getClient().sendMessage(config.groupId, message);
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (sent as any)?.id?._serialized ?? (sent as any)?.id ?? 'unknown';
-    console.log(`[WhatsApp] Message sent to group (id: ${msgId})`);
+      const msgId =
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (sent as any)?.id?._serialized ?? (sent as any)?.id ?? 'unknown';
+      console.log(`[WhatsApp] Message sent to group (id: ${msgId})`);
 
-    // Give Chromium a moment to flush the outgoing message over the network.
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+      // Give Chromium a moment to flush the outgoing message over the network.
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+
+      // "detached Frame" means Chromium's page context was destroyed without
+      // firing `disconnected`. Treat it the same way.
+      if (
+        msg.includes('detached Frame') ||
+        msg.includes('detached frame') ||
+        msg.includes('Session closed') ||
+        msg.includes('Target closed') ||
+        msg.includes('destroyed chrome')
+      ) {
+        triggerReconnect(`Chromium session error: ${msg}`);
+      }
+
+      // Re-throw so broadcast() logs the failure and Telegram still sends.
+      throw err;
+    }
   }
 
   return {
     name: 'WhatsApp',
 
     init(): Promise<void> {
-      return new Promise((resolve, reject) => {
-        client = new Client({
-          authStrategy: new LocalAuth({ dataPath: config.sessionPath }),
-          puppeteer: {
-            headless: true,
-            args: [
-              '--no-sandbox',
-              '--disable-setuid-sandbox',
-              '--disable-dev-shm-usage',
-              '--disable-gpu',
-            ],
-          },
-        });
-
-        client.on('qr', (qr: string) => {
-          console.log(
-            '\n📱 Scan the QR code below with WhatsApp on the bot phone:',
-          );
-          console.log('   (WhatsApp → Linked Devices → Link a Device)\n');
-          qrcode.generate(qr, { small: true });
-        });
-
-        client.on('authenticated', () => {
-          console.log('[WhatsApp] Authenticated — session saved');
-        });
-
-        client.on('ready', () => {
-          console.log('[WhatsApp] Client is ready');
-          resolve();
-        });
-
-        client.on('auth_failure', (msg: string) => {
-          console.error('[WhatsApp] Authentication failed:', msg);
-          reject(new Error(`WhatsApp auth failure: ${msg}`));
-        });
-
-        client.on('disconnected', (reason: string) => {
-          console.warn('[WhatsApp] Client disconnected:', reason);
-        });
-
-        console.log('[WhatsApp] Initialising client (this may take a moment)...');
-        client.initialize().catch(reject);
-      });
+      destroyed = false;
+      return createAndInitClient();
     },
 
     async sendMultipleCancellationNotifications(
@@ -185,6 +277,8 @@ export function createWhatsAppNotifier(config: WhatsAppConfig): Notifier {
     },
 
     async destroy(): Promise<void> {
+      destroyed = true;
+      isReady = false;
       if (client) {
         try {
           await client.destroy();
