@@ -37,6 +37,13 @@ const RECONNECT_DELAY_MS = 15_000;
 const MAX_RECONNECT_ATTEMPTS = 5;
 
 /**
+ * How often to probe the Chromium page to verify the session is still alive.
+ * Chosen to be shorter than the typical gap between notifications so frame
+ * death is detected and healed before the next send is attempted.
+ */
+const HEALTH_CHECK_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
+
+/**
  * Create a WhatsApp Notifier bound to the given configuration.
  * @param config - WhatsApp channel configuration
  * @returns A Notifier implementation for WhatsApp
@@ -47,6 +54,44 @@ export function createWhatsAppNotifier(config: WhatsAppConfig): Notifier {
   let isReady = false;
   let reconnectAttempts = 0;
   let destroyed = false;
+  let healthCheckTimer: ReturnType<typeof setInterval> | null = null;
+
+  /**
+   * Stop the periodic health check timer.
+   */
+  function stopHealthCheck(): void {
+    if (healthCheckTimer !== null) {
+      clearInterval(healthCheckTimer);
+      healthCheckTimer = null;
+    }
+  }
+
+  /**
+   * Start a periodic health check that evaluates a no-op expression on the
+   * Chromium page.  If the page has been detached (frame death without a
+   * disconnected event), the evaluate throws and triggerReconnect() is called
+   * immediately — before the next notification is attempted.
+   */
+  function startHealthCheck(): void {
+    stopHealthCheck();
+
+    healthCheckTimer = setInterval(async () => {
+      if (destroyed || !isReady || !client) {
+        return;
+      }
+
+      try {
+        // pupPage is a Puppeteer Page object; evaluate a trivial expression
+        // to confirm the frame is still alive.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (client as any).pupPage.evaluate(() => true);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        stopHealthCheck();
+        triggerReconnect(`Health check failed: ${msg}`);
+      }
+    }, HEALTH_CHECK_INTERVAL_MS);
+  }
 
   /**
    * Spin up a fresh Client instance and wire all event handlers.
@@ -83,6 +128,7 @@ export function createWhatsAppNotifier(config: WhatsAppConfig): Notifier {
         console.log('[WhatsApp] Client is ready');
         isReady = true;
         reconnectAttempts = 0;
+        startHealthCheck();
         resolve();
       });
 
@@ -132,6 +178,7 @@ export function createWhatsAppNotifier(config: WhatsAppConfig): Notifier {
     console.warn(`[WhatsApp] ${reason} — triggering reconnect.`);
     isReady = false;
     client = null;
+    stopHealthCheck();
 
     if (destroyed) {
       return;
@@ -279,6 +326,7 @@ export function createWhatsAppNotifier(config: WhatsAppConfig): Notifier {
     async destroy(): Promise<void> {
       destroyed = true;
       isReady = false;
+      stopHealthCheck();
       if (client) {
         try {
           await client.destroy();
